@@ -72,7 +72,7 @@
 
             <div class="col-md-6">
               <label for="evaluation_url" class="form-label">Evaluation URL</label>
-              <input type="text" class="form-control" id="evaluation_url" value="http://localhost:5001/evaluate">
+              <input type="text" class="form-control" id="evaluation_url" value="/evaluate">
             </div>
 
             <div class="col-12">
@@ -144,7 +144,7 @@
 
       try {
         status.textContent = "Task in progress... please wait";
-        const res = await fetch("http://127.0.0.1:5000/api-endpoint", {
+        const res = await fetch("/api-endpoint", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
