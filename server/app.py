@@ -9,10 +9,10 @@ import traceback
 from flask_cors import CORS
 import subprocess  # <-- Added to run server.py automatically
 
-from github_utils import create_repo, create_file, add_license, enable_github_pages, wait_for_pages_ok
-from utils import verify_secret, post_evaluation
-from llm_generator import call_llm_generate
-from attachments import save_data_uri
+from .github_utils import create_repo, create_file, add_license, enable_github_pages, wait_for_pages_ok
+from .utils import verify_secret, post_evaluation
+from .llm_generator import call_llm_generate
+from .attachments import save_data_uri
 
 load_dotenv()
 
