@@ -1,14 +1,16 @@
-from flask import Flask, render_template, request, jsonify
-from dotenv import load_dotenv
+# server/app.py
 import os
 import uuid
 import tempfile
 import shutil
 import traceback
+import time
+import requests
+from flask import Flask, render_template, request, jsonify
+from dotenv import load_dotenv
 from flask_cors import CORS
 
 from .github_utils import create_repo, create_file, add_license, enable_github_pages, wait_for_pages_ok
-from .utils import verify_secret, post_evaluation
 from .llm_generator import call_llm_generate
 from .attachments import save_data_uri
 from instructor.evaluate import check_mit_license, fetch_readme, llm_evaluate_text, playwright_check
@@ -24,6 +26,35 @@ app.config['EMAIL'] = os.getenv("EMAIL")
 app.config['GITHUB_TOKEN'] = os.getenv("GITHUB_TOKEN")
 
 
+# ------------------- UTILS MERGED -------------------
+def verify_secret(provided_secret: str):
+    secret = os.getenv("SECRET_KEY")
+    if not secret:
+        return "SECRET_KEY not set in environment", 500
+    return provided_secret == secret
+
+
+def post_evaluation(evaluation_url: str, payload: dict, max_retries: int=6):
+    """
+    POST to evaluation_url. On failure, retry with exponential backoff (1,2,4,8...).
+    Returns response code or raises.
+    """
+    headers = {"Content-Type": "application/json"}
+    delay = 1
+    for attempt in range(max_retries):
+        try:
+            r = requests.post(evaluation_url, json=payload, headers=headers, timeout=10)
+            if r.status_code == 200:
+                return r
+            # else retry
+        except Exception:
+            pass
+        time.sleep(delay)
+        delay *= 2
+    raise RuntimeError(f"Failed to POST evaluation after {max_retries} attempts")
+
+
+# ------------------- ROUTES -------------------
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -89,9 +120,8 @@ def api_endpoint():
 
         enable_github_pages(repo_full_name, branch="main", folder="/")
         pages_url = f"https://{owner}.github.io/{repo_name}/"
-        wait_for_pages_ok(pages_url, timeout=300)
+        wait_for_pages_ok(pages_url, timeout=600)  # increase to 10 mins
 
-        import requests
         commits_url = f"https://api.github.com/repos/{repo_full_name}/commits"
         r = requests.get(
             commits_url,
