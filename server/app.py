@@ -10,6 +10,7 @@ from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 from flask_cors import CORS
 
+# ✅ Import from same package or proper relative path
 from .github_utils import create_repo, create_file, add_license, enable_github_pages, wait_for_pages_ok
 from .llm_generator import call_llm_generate
 from .attachments import save_data_uri
@@ -20,24 +21,22 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Load environment variables
+# ------------------- CONFIG -------------------
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 app.config['EMAIL'] = os.getenv("EMAIL")
 app.config['GITHUB_TOKEN'] = os.getenv("GITHUB_TOKEN")
 
-
-# ------------------- UTILS MERGED -------------------
+# ------------------- UTILS -------------------
 def verify_secret(provided_secret: str):
     secret = os.getenv("SECRET_KEY")
     if not secret:
-        return "SECRET_KEY not set in environment", 500
+        raise ValueError("SECRET_KEY not set in environment")
     return provided_secret == secret
 
 
-def post_evaluation(evaluation_url: str, payload: dict, max_retries: int=6):
+def post_evaluation(evaluation_url: str, payload: dict, max_retries: int = 6):
     """
     POST to evaluation_url. On failure, retry with exponential backoff (1,2,4,8...).
-    Returns response code or raises.
     """
     headers = {"Content-Type": "application/json"}
     delay = 1
@@ -46,13 +45,11 @@ def post_evaluation(evaluation_url: str, payload: dict, max_retries: int=6):
             r = requests.post(evaluation_url, json=payload, headers=headers, timeout=10)
             if r.status_code == 200:
                 return r
-            # else retry
         except Exception:
             pass
         time.sleep(delay)
         delay *= 2
     raise RuntimeError(f"Failed to POST evaluation after {max_retries} attempts")
-
 
 # ------------------- ROUTES -------------------
 @app.route("/")
@@ -60,13 +57,11 @@ def home():
     return render_template("index.html")
 
 
-# Generate unique repo name
 def make_repo_name(task: str, email: str):
     task = task.replace(" ", "-").lower()
     return f"{task}-{uuid.uuid4().hex[:6]}"
 
 
-# Push generated files to GitHub repo
 def prepare_and_push_repo(repo_full_name: str, files: list, owner: str):
     for file in files:
         file_path = file['path']
@@ -79,7 +74,6 @@ def prepare_and_push_repo(repo_full_name: str, files: list, owner: str):
 def api_endpoint():
     try:
         body = request.get_json(force=True)
-
         email = body.get("email")
         secret = body.get("secret")
         task = body.get("task")
@@ -90,12 +84,11 @@ def api_endpoint():
         attachments = body.get("attachments", [])
         evaluation_url = body.get("evaluation_url")
 
-        # Verify secret key
+        # ✅ Verify secret
         if not verify_secret(secret):
             return jsonify({"error": "Secret mismatch"}), 400
 
-        resp = {"status": "accepted", "message": "Processing your request."}
-
+        # Generate files
         tmpdir = tempfile.mkdtemp(prefix="task_")
         saved = []
 
@@ -106,11 +99,11 @@ def api_endpoint():
                 if url and url.startswith("data:"):
                     fname = save_data_uri(url, tmpdir)
                     saved.append({"name": name, "path": fname})
-
             files = call_llm_generate(brief, saved)
         finally:
             shutil.rmtree(tmpdir)
 
+        # Create GitHub repo
         repo_name = make_repo_name(task, email)
         repo_meta = create_repo(repo_name, private=False, description=f"Auto-generated for {task}")
         owner = repo_meta['owner']['login']
@@ -118,18 +111,18 @@ def api_endpoint():
 
         prepare_and_push_repo(repo_full_name, files, owner)
 
+        # Enable GitHub Pages
         enable_github_pages(repo_full_name, branch="main", folder="/")
         pages_url = f"https://{owner}.github.io/{repo_name}/"
-        wait_for_pages_ok(pages_url, timeout=600)  # increase to 10 mins
+        wait_for_pages_ok(pages_url, timeout=600)  # 10 minutes
 
+        # Get latest commit SHA
         commits_url = f"https://api.github.com/repos/{repo_full_name}/commits"
-        r = requests.get(
-            commits_url,
-            headers={"Authorization": f"token {os.environ.get('GITHUB_TOKEN')}"}
-        )
+        r = requests.get(commits_url, headers={"Authorization": f"token {os.getenv('GITHUB_TOKEN')}"})
         r.raise_for_status()
         commit_sha = r.json()[0]["sha"]
 
+        # Build payload
         payload = {
             "email": email,
             "task": task,
@@ -139,15 +132,12 @@ def api_endpoint():
             "commit_sha": commit_sha,
             "pages_url": pages_url
         }
-        post_evaluation(evaluation_url, payload)
 
-        resp.update({
-            "repo_url": payload["repo_url"],
-            "pages_url": pages_url,
-            "commit_sha": commit_sha
-        })
+        # 🔸 If you want to trigger evaluation, uncomment this
+        # post_evaluation(evaluation_url, payload)
 
-        return jsonify(resp), 200
+        # ✅ Return payload directly so frontend shows full data
+        return jsonify(payload), 200
 
     except Exception as e:
         traceback.print_exc()
@@ -178,7 +168,7 @@ def evaluate():
     else:
         results["js_checks"] = []
 
-    return jsonify({"status": "ok", "results": results})
+    return jsonify({"status": "ok", "results": results}), 200
 
 
 if __name__ == "__main__":
