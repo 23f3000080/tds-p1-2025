@@ -1,18 +1,17 @@
 from flask import Flask, render_template, request, jsonify
 from dotenv import load_dotenv
 import os
-import sys
 import uuid
 import tempfile
 import shutil
 import traceback
 from flask_cors import CORS
-import subprocess  # <-- Added to run server.py automatically
 
 from .github_utils import create_repo, create_file, add_license, enable_github_pages, wait_for_pages_ok
 from .utils import verify_secret, post_evaluation
 from .llm_generator import call_llm_generate
 from .attachments import save_data_uri
+from instructor.evaluate import check_mit_license, fetch_readme, llm_evaluate_text, playwright_check
 
 load_dotenv()
 
@@ -23,15 +22,6 @@ CORS(app)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY")
 app.config['EMAIL'] = os.getenv("EMAIL")
 app.config['GITHUB_TOKEN'] = os.getenv("GITHUB_TOKEN")
-
-
-# --- START server.py automatically ---
-server_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "instructor", "server.py")
-)
-server_process = subprocess.Popen([sys.executable, server_path])
-print(f"Started server.py with PID: {server_process.pid}")
-# --- END server.py automatically ---
 
 
 @app.route("/")
@@ -73,15 +63,12 @@ def api_endpoint():
         if not verify_secret(secret):
             return jsonify({"error": "Secret mismatch"}), 400
 
-        # Response placeholder
         resp = {"status": "accepted", "message": "Processing your request."}
 
-        # Create temporary directory for attachments
         tmpdir = tempfile.mkdtemp(prefix="task_")
         saved = []
 
         try:
-            # Process attachments
             for att in attachments:
                 name = att.get("name")
                 url = att.get("url")
@@ -89,28 +76,21 @@ def api_endpoint():
                     fname = save_data_uri(url, tmpdir)
                     saved.append({"name": name, "path": fname})
 
-            # Generate files via LLM
             files = call_llm_generate(brief, saved)
-
         finally:
-            # Clean up temporary files
             shutil.rmtree(tmpdir)
 
-        # Create GitHub repo
         repo_name = make_repo_name(task, email)
         repo_meta = create_repo(repo_name, private=False, description=f"Auto-generated for {task}")
         owner = repo_meta['owner']['login']
         repo_full_name = repo_meta['full_name']
 
-        # Push files to repo
-        prepare_and_push_repo(repo_full_name, files, owner=owner)
+        prepare_and_push_repo(repo_full_name, files, owner)
 
-        # Enable GitHub Pages
         enable_github_pages(repo_full_name, branch="main", folder="/")
         pages_url = f"https://{owner}.github.io/{repo_name}/"
-        ok = wait_for_pages_ok(pages_url, timeout=300)
+        wait_for_pages_ok(pages_url, timeout=300)
 
-        # Get latest commit SHA
         import requests
         commits_url = f"https://api.github.com/repos/{repo_full_name}/commits"
         r = requests.get(
@@ -120,7 +100,6 @@ def api_endpoint():
         r.raise_for_status()
         commit_sha = r.json()[0]["sha"]
 
-        # Send evaluation payload
         payload = {
             "email": email,
             "task": task,
@@ -132,7 +111,6 @@ def api_endpoint():
         }
         post_evaluation(evaluation_url, payload)
 
-        # Return final response
         resp.update({
             "repo_url": payload["repo_url"],
             "pages_url": pages_url,
@@ -144,6 +122,33 @@ def api_endpoint():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/evaluate", methods=["POST"])
+def evaluate():
+    data = request.get_json(force=True)
+    print("Received payload:", data)
+
+    repo_url = data.get("repo_url", "")
+    pages_url = data.get("pages_url", "")
+    checks = data.get("checks", [])
+    js_checks = data.get("js_checks", [])
+
+    results = {}
+
+    if "Repo has MIT license" in checks:
+        results["mit_license"] = check_mit_license(repo_url)
+
+    if "README.md is professional" in checks:
+        readme = fetch_readme(repo_url) or ""
+        results["readme_eval"] = llm_evaluate_text(readme)
+
+    if js_checks:
+        results["js_checks"] = playwright_check(pages_url, js_checks)
+    else:
+        results["js_checks"] = []
+
+    return jsonify({"status": "ok", "results": results})
 
 
 if __name__ == "__main__":
