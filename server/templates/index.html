@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Instructor Task Sender</title>
+  <!-- Bootstrap 5 CSS CDN -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #f2f5f7;
+      font-family: 'Segoe UI', sans-serif;
+    }
+    .card {
+      margin-top: 50px;
+      border-radius: 1rem;
+    }
+    .status {
+      font-weight: 500;
+      margin-bottom: 15px;
+    }
+    pre {
+      background-color: #e9ecef;
+      padding: 15px;
+      border-radius: 0.5rem;
+      overflow-x: auto;
+      max-height: 300px;
+    }
+    .btn-primary {
+      background: linear-gradient(to right, #4e54c8, #8f94fb);
+      border: none;
+    }
+    .btn-primary:hover {
+      background: linear-gradient(to right, #8f94fb, #4e54c8);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card shadow-sm">
+      <div class="card-body">
+        <h3 class="card-title mb-4 text-center">Instructor Task Sender</h3>
+
+        <div id="statusMessage" class="status text-center text-secondary">Awaiting task submission...</div>
+
+        <form id="taskForm">
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label for="email" class="form-label">Student Email</label>
+              <input type="email" class="form-control" id="email" placeholder="student@example.com" required>
+            </div>
+
+            <div class="col-md-6">
+              <label for="secret" class="form-label">Secret Key</label>
+              <input type="text" class="form-control" id="secret" placeholder="Your secret key" required>
+            </div>
+
+            <div class="col-md-6">
+              <label for="task" class="form-label">Task ID</label>
+              <input type="text" class="form-control" id="task" placeholder="captcha-solver-abc123">
+            </div>
+
+            <div class="col-md-6">
+              <label for="brief" class="form-label">Task Brief</label>
+              <input type="text" class="form-control" id="brief" placeholder="Create a captcha solver..." required>
+            </div>
+
+            <div class="col-md-6">
+              <label for="checks" class="form-label">Checks (comma-separated)</label>
+              <input type="text" class="form-control" id="checks" placeholder="Repo has MIT license, README.md is professional">
+            </div>
+
+            <div class="col-md-6">
+              <label for="evaluation_url" class="form-label">Evaluation URL</label>
+              <input type="text" class="form-control" id="evaluation_url" value="http://localhost:5001/evaluate">
+            </div>
+
+            <div class="col-12">
+              <label for="attachments" class="form-label">Attachments (upload files)</label>
+              <input type="file" class="form-control" id="attachments" multiple>
+            </div>
+
+            <div class="col-12 text-center">
+              <button type="submit" class="btn btn-primary mt-3 px-5">Send Task</button>
+            </div>
+          </div>
+        </form>
+
+        <hr>
+        <h5 class="mt-4">Response:</h5>
+        <pre id="responseOutput">Awaiting task submission...</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS & Popper CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const form = document.getElementById('taskForm');
+    const output = document.getElementById('responseOutput');
+    const status = document.getElementById('statusMessage');
+    const attachmentsInput = document.getElementById('attachments');
+
+    // Helper to convert file to data URI
+    function fileToDataURI(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      status.textContent = "Task is being sent...";
+      output.textContent = "Preparing attachments...";
+
+      const payload = {
+        email: document.getElementById('email').value,
+        secret: document.getElementById('secret').value,
+        task: document.getElementById('task').value || `task-${Math.random().toString(36).substring(2, 8)}`,
+        round: 1,
+        nonce: Math.random().toString(36).substring(2, 15),
+        brief: document.getElementById('brief').value,
+        checks: document.getElementById('checks').value.split(',').map(c => c.trim()),
+        evaluation_url: document.getElementById('evaluation_url').value,
+        attachments: []
+      };
+
+      // Convert files to data URIs
+      const files = attachmentsInput.files;
+      for (let i = 0; i < files.length; i++) {
+        try {
+          const dataURI = await fileToDataURI(files[i]);
+          payload.attachments.push({ name: files[i].name, url: dataURI });
+        } catch (err) {
+          status.textContent = "Error reading file: " + files[i].name;
+          output.textContent = err;
+          return;
+        }
+      }
+
+      try {
+        status.textContent = "Task in progress... please wait";
+        const res = await fetch("http://127.0.0.1:5000/api-endpoint", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        status.textContent = "Task completed!";
+        output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        status.textContent = "Error sending task!";
+        output.textContent = "Error: " + err;
+      }
+    });
+  </script>
+</body>
+</html>
